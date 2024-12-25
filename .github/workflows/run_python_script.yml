@@ -3,7 +3,7 @@ name: Ejecutar Código Python Cada X Horas
 on:
   schedule:
     # Ejecutar cada hora
-    - cron: "0 * * * *"
+    - cron: "5 * * * *"
   workflow_dispatch:  # Habilita el disparo manual
 
 jobs:
