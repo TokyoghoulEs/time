@@ -3,7 +3,7 @@ name: Ejecutar Código Python Cada X Horas
 on:
   schedule:
     # Ejecutar cada 3 horas
-    - cron: "0 */3 * * *"
+    - cron: "0 * * * *"
 
 jobs:
   run-python:
