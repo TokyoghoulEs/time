@@ -9,4 +9,4 @@ timezone = pytz.timezone("Europe/Madrid")
 local_time = utc_now.replace(tzinfo=pytz.utc).astimezone(timezone)
 
 # Imprimir la hora local
-print(f"Hora local de ejecución: {local_time}")
+print(f"Hora local de ejecución en Madrid: {local_time}")
