@@ -53,10 +53,14 @@ jobs:
         env:
           REPOS: ${{ steps.get_repos.outputs.repos }}
           REPO_COUNT: ${{ steps.get_repos.outputs.count }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+          CURRENT_REPO: ${{ github.repository }}
         run: |
           echo "========================================="
           echo "  LIMPIEZA DE WORKFLOW RUNS"
           echo "========================================="
+          echo ""
+          echo "ℹ️  Workflow run actual: $CURRENT_RUN_ID (será excluido)"
           echo ""
           
           TOTAL_DELETED=0
@@ -114,10 +118,21 @@ jobs:
               while IFS= read -r run_id; do
                 [ -z "$run_id" ] && continue
                 
-                gh run delete "$run_id" --repo "$repo" 2>&1 > /dev/null
+                # Saltar el workflow run actual para evitar error
+                if [ "$repo" = "$CURRENT_REPO" ] && [ "$run_id" = "$CURRENT_RUN_ID" ]; then
+                  echo "   ⏭️  Saltando workflow run actual ($run_id)"
+                  continue
+                fi
+                
+                DELETE_OUTPUT=$(gh run delete "$run_id" --repo "$repo" 2>&1)
                 if [ $? -eq 0 ]; then
                   REPO_DELETED=$((REPO_DELETED + 1))
                   TOTAL_DELETED=$((TOTAL_DELETED + 1))
+                else
+                  # Si falla por ser el run actual, no es un error
+                  if echo "$DELETE_OUTPUT" | grep -q "Could not delete the workflow run"; then
+                    echo "   ⏭️  Saltando run en ejecución ($run_id)"
+                  fi
                 fi
                 
                 # Pequeño delay
