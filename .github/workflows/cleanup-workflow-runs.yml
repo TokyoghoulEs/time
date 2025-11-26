@@ -1,0 +1,167 @@
+name: Limpiar Workflow Runs Antiguos
+
+on:
+  schedule:
+    # Ejecutar cada 48 horas (a las 3:00 AM UTC)
+    - cron: '0 3 */2 * *'
+  workflow_dispatch:  # Permitir ejecución manual
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Configurar GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+      
+      - name: Verificar Rate Limit
+        id: check_rate_limit
+        run: |
+          RATE_INFO=$(gh api rate_limit --jq '.rate')
+          REMAINING=$(echo "$RATE_INFO" | jq -r '.remaining')
+          LIMIT=$(echo "$RATE_INFO" | jq -r '.limit')
+          
+          echo "remaining=$REMAINING" >> $GITHUB_OUTPUT
+          echo "limit=$LIMIT" >> $GITHUB_OUTPUT
+          
+          echo "📊 Rate Limit: $REMAINING/$LIMIT requests disponibles"
+          
+          if [ "$REMAINING" -lt 100 ]; then
+            echo "⚠️ Rate limit muy bajo, deteniendo ejecución"
+            exit 1
+          fi
+      
+      - name: Obtener Lista de Repositorios
+        id: get_repos
+        run: |
+          echo "Obteniendo lista de repositorios..."
+          REPOS=$(gh repo list TokyoghoulEs --limit 1000 --json nameWithOwner --jq '.[].nameWithOwner')
+          REPO_COUNT=$(echo "$REPOS" | wc -l)
+          
+          echo "repos<<EOF" >> $GITHUB_OUTPUT
+          echo "$REPOS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "count=$REPO_COUNT" >> $GITHUB_OUTPUT
+          echo "✅ Encontrados $REPO_COUNT repositorios"
+      
+      - name: Limpiar Workflow Runs
+        env:
+          REPOS: ${{ steps.get_repos.outputs.repos }}
+          REPO_COUNT: ${{ steps.get_repos.outputs.count }}
+        run: |
+          echo "========================================="
+          echo "  LIMPIEZA DE WORKFLOW RUNS"
+          echo "========================================="
+          echo ""
+          
+          TOTAL_DELETED=0
+          CURRENT=0
+          
+          # Procesar cada repositorio
+          while IFS= read -r repo; do
+            [ -z "$repo" ] && continue
+            
+            CURRENT=$((CURRENT + 1))
+            PROGRESS=$(awk "BEGIN {printf \"%.1f\", ($CURRENT / $REPO_COUNT) * 100}")
+            
+            echo "[$CURRENT/$REPO_COUNT - $PROGRESS%] $repo"
+            
+            # Verificar rate limit antes de procesar
+            REMAINING=$(gh api rate_limit --jq '.rate.remaining')
+            if [ "$REMAINING" -lt 50 ]; then
+              echo "🛑 Rate limit alcanzado ($REMAINING requests restantes)"
+              echo "   Deteniendo limpieza. Se continuará en la próxima ejecución."
+              break
+            fi
+            
+            REPO_DELETED=0
+            HAS_MORE=true
+            
+            # Limpiar TODOS los runs del repositorio
+            while [ "$HAS_MORE" = true ]; do
+              # Obtener runs (máximo 200 por iteración)
+              RUNS=$(gh run list --repo "$repo" --limit 200 --json databaseId --jq '.[].databaseId' 2>&1)
+              EXIT_CODE=$?
+              
+              # Verificar errores
+              if [ $EXIT_CODE -ne 0 ]; then
+                if echo "$RUNS" | grep -q "rate limit\|403"; then
+                  echo "   🛑 Rate limit alcanzado"
+                  HAS_MORE=false
+                  break 2  # Salir de ambos loops
+                else
+                  echo "   ✓ Sin workflow runs"
+                  HAS_MORE=false
+                  break
+                fi
+              fi
+              
+              RUN_COUNT=$(echo "$RUNS" | wc -l)
+              
+              if [ "$RUN_COUNT" -eq 0 ] || [ -z "$RUNS" ]; then
+                HAS_MORE=false
+                break
+              fi
+              
+              echo "   Eliminando $RUN_COUNT workflow runs..."
+              
+              # Eliminar cada run
+              while IFS= read -r run_id; do
+                [ -z "$run_id" ] && continue
+                
+                gh run delete "$run_id" --repo "$repo" 2>&1 > /dev/null
+                if [ $? -eq 0 ]; then
+                  REPO_DELETED=$((REPO_DELETED + 1))
+                  TOTAL_DELETED=$((TOTAL_DELETED + 1))
+                fi
+                
+                # Pequeño delay
+                sleep 0.05
+              done <<< "$RUNS"
+              
+              # Si obtuvimos menos de 200, ya no hay más
+              if [ "$RUN_COUNT" -lt 200 ]; then
+                HAS_MORE=false
+              fi
+            done
+            
+            if [ "$REPO_DELETED" -gt 0 ]; then
+              echo "   ✅ Eliminados: $REPO_DELETED runs"
+            else
+              echo "   ✓ Sin workflow runs"
+            fi
+            echo ""
+            
+          done <<< "$REPOS"
+          
+          echo "========================================="
+          echo "  RESUMEN FINAL"
+          echo "========================================="
+          echo "Repositorios procesados: $CURRENT de $REPO_COUNT"
+          echo "Total workflow runs eliminados: $TOTAL_DELETED"
+          echo ""
+          
+          if [ "$CURRENT" -lt "$REPO_COUNT" ]; then
+            echo "⚠️ Limpieza parcial debido a rate limit"
+            echo "   Se continuará en la próxima ejecución programada"
+          else
+            echo "✅ Limpieza completada exitosamente"
+          fi
+      
+      - name: Verificar Rate Limit Final
+        if: always()
+        run: |
+          RATE_INFO=$(gh api rate_limit --jq '.rate')
+          REMAINING=$(echo "$RATE_INFO" | jq -r '.remaining')
+          LIMIT=$(echo "$RATE_INFO" | jq -r '.limit')
+          RESET=$(echo "$RATE_INFO" | jq -r '.reset')
+          
+          echo ""
+          echo "📊 Rate Limit Final:"
+          echo "   Restante: $REMAINING/$LIMIT"
+          echo "   Se resetea: $(date -d @$RESET)"
